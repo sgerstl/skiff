@@ -73,6 +73,16 @@ static int st_erase(uint32_t off) { (void)off; return -1; }
 #include "../firmware/src/storage.c"
 static uint32_t host_rec_taps;                      /* (ui_input.c's REC, not built here; ui_test has it) */
 static int rec_tap(void) { host_rec_taps++; song.rec ^= (uint8_t)(1u << song.sel); return 1; }
+/* (screen link: ui.c page_visible; ui_input.c's SHEETS, not built here, by their pages and engines only) */
+static const sheet_t host_sheets[] = {{GR_DXSND, ENGI_DRUMX}, {GR_FMOP, ENGI_FM6}, {GR_FMALL, ENGI_FM6}};
+static const sheet_t *sheet_of(uint32_t g)
+{
+    uint32_t i;
+    for (i = 0; i < 3u; i++)
+        if (host_sheets[i].graph == g)
+            return &host_sheets[i];
+    return 0;
+}
 #include "../firmware/src/editor.c"
 
 static int check(const char *what, int ok)
@@ -190,7 +200,10 @@ static int preferences(void)
     uint8_t a[4] = {0, 3, 0, 0};                          /* (THEME: 3, CRYPT) */
     reset();
     uint32_t n = request(ED_INFO, a, 0);
-    bad += check("INFO (2.0) the song's tag last: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
+    bad += check("INFO (screen link) its tag last: 56 01 01 (SCREEN, SCREEN_GOTO, WATCH bit 2)",
+        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 1);
+    n -= 3u;                                              /* (the tags before it, as they were) */
+    bad += check("INFO (2.0) the song's tag next: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
         host_wire[n - 4] == 0x58 && host_wire[n - 3] == 1 && host_wire[n - 2] == ED_SONG2);
     n -= 3u;                                              /* (the tags before it, as they were) */
     bad += check("INFO (1.3) wide ids next: 49 01, P_COUNT and P_E0 in two 7-bit bytes each; the plain bytes at most 127",
@@ -1650,11 +1663,102 @@ static int custom_colors(void)
     return bad;
 }
 
+/* (screen link) SCREEN (90), SCREEN_GOTO (91), WATCH bit 2: the state asked and pushed, pages opened as their
+ * buttons open them; an editor that never asks sees nothing new */
+static uint32_t page_named(const char *t)
+{
+    uint32_t i;
+    for (i = 0; i < NPAGES && strcmp(PAGES[i].title, t); i++)
+        ;
+    return i;
+}
+static int screen_is(const uint8_t *x, uint32_t home, uint32_t page, uint32_t layer, uint32_t menu, uint32_t sel,
+                     uint32_t flags)
+{
+    return x[0] == home && x[1] == page && x[2] == layer && x[3] == menu && x[4] == sel && x[5] == flags && x[6] == 0xF7;
+}
+static int screen_link(void)
+{
+    int bad = 0;
+    uint8_t a[2] = {3, 0};
+    const uint8_t *x = 0;
+    uint32_t mixer = page_named("MIXER"), lanes = page_named("LANES"), fx = page_named("FX");
+    reset();
+    usb.resets = 0;
+    ui.page = (uint8_t)fx;
+    bad += check("SCREEN: home, page, layer, menu, track, flags",
+        request(ED_SCREEN, a, 0) == 12u && host_wire[4] == ED_SCREEN && screen_is(host_wire + 5, 0, fx, 0, 0, 0, 0));
+    request(ED_WATCH, a, 1);
+    bad += check("WATCH 3: the reply without bit 2", host_wire[5] == 3 && !ed_scr_on);
+    ui.page = (uint8_t)mixer; ui.layer = LAYER_FX; ui.menu = 1;
+    bad += check("WATCH 3: no SCREEN push when the screen changes", !wire_frames(ED_SCREEN, 0) && !sync_pass());
+    ui.layer = 0; ui.menu = 0;
+    a[0] = 7; request(ED_WATCH, a, 1);
+    bad += check("WATCH 7: bit 2 in the reply", host_wire[5] == 7 && ed_scr_on);
+    sync_pass();
+    bad += check("WATCH 7: the state pushed at once, then nothing",
+        wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 0, mixer, 0, 0, 0, 0) && !sync_pass());
+    ui.layer = LAYER_SEQ;
+    sync_pass();
+    bad += check("a layer held: pushed", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 0, mixer, LAYER_SEQ, 0, 0, 0));
+    ui.lock = LAYER_SEQ; ui.layer = LAYER_SEQ;
+    sync_pass();
+    bad += check("the layer locked open: flags bit 1", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 0, mixer, LAYER_SEQ, 0, 0, 2));
+    ui.lock = ui.layer = 0; ui.home = 1; ui.home_scope = 1;
+    sync_pass();
+    bad += check("HOME with its scope: home 1, flags bit 0", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 1, mixer, 0, 0, 0, 1));
+    ui.home_scope = 0; ui.shift = 1;
+    sync_pass();
+    bad += check("SHIFT's map: flags bit 2", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 1, mixer, 0, 0, 0, 4));
+    ui.shift = 0; ui.menu = 2;
+    sync_pass();
+    bad += check("MENU's ABOUT: menu 2", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 1, mixer, 0, 2, 0, 0));
+    ui.menu = 0;
+    sync_pass();
+    a[0] = 2; request(ED_TRACK, a, 1);
+    sync_pass();
+    bad += check("another track selected (TRACK): pushed with it", wire_frames(ED_SCREEN, &x) == 1u && screen_is(x, 1, mixer, 0, 0, 2, 0));
+    a[0] = 7; request(ED_WATCH, a, 1);
+    bad += check("WATCH 7 while watching: no push again", !sync_pass());
+    a[0] = (uint8_t)fx; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO FX: opened, the reply its state, no push of it",
+        host_wire[4] == ED_SCREEN_GOTO && screen_is(host_wire + 5, 0, fx, 0, 0, 2, 0) && !ui.home && ui.fam_last[FAM_FX] == fx &&
+        !wire_frames(ED_SCREEN, 0) && !sync_pass());
+    a[0] = (uint8_t)mixer; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO MIXER: GLO's family remembers it", screen_is(host_wire + 5, 0, mixer, 0, 0, 2, 0) &&
+        ui.fam_last[FAM_GLO] == mixer);
+    a[0] = 127; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO 127: HOME", screen_is(host_wire + 5, 1, mixer, 0, 0, 2, 0) && ui.home);
+    a[0] = (uint8_t)lanes; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO LANES on ANALOG: refused, the state as it is", screen_is(host_wire + 5, 1, mixer, 0, 0, 2, 0));
+    a[0] = NPAGES; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO past the pages: refused, the state as it is", screen_is(host_wire + 5, 1, mixer, 0, 0, 2, 0));
+    ui.confirm = CF_CLEAR_SEQ;
+    a[0] = (uint8_t)fx; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO under a dialog: refused", screen_is(host_wire + 5, 1, mixer, 0, 0, 2, 0) && ui.confirm);
+    ui.confirm = 0; ui.menu = 1;
+    request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO from the MENU: closed, the page opened", screen_is(host_wire + 5, 0, fx, 0, 0, 2, 0) && !ui.menu);
+    ui.lock = ui.ly = LAYER_GLO;
+    a[0] = 127; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN_GOTO over a locked layer: the lock goes", !ui.lock && ui.home);
+    ui.ly = 0;
+    a[0] = 1; request(ED_WATCH, a, 1);
+    sync_pass();
+    ui.page = (uint8_t)mixer; ui.home = 0;
+    sync_pass();
+    bad += check("WATCH 1: no more SCREEN pushes", !wire_frames(ED_SCREEN, 0));
+    ui.page = (uint8_t)fx;
+    a[0] = 0; request(ED_SCREEN_GOTO, a, 0);
+    bad += check("SCREEN_GOTO without its page: no reply", !host_wire_n);
+    return bad;
+}
+
 int main(void)
 {
     int bad = preferences() + motion_locks() + wide_ids() + framing() + uart_recovery() + steps() + samples() + smp_mix() + song_protocol() + malformed_saves() +
               fm6_patches() + user_preset_roundtrip() + live_sync() + usb_burst() + menu_protocol() + drum_kit_retired() +
-              light_tracks() + preset_more() + transport_names() + song_cmds() + song2_cmds() + custom_colors();
+              light_tracks() + preset_more() + transport_names() + song_cmds() + song2_cmds() + custom_colors() + screen_link();
     printf("%s\n", bad ? "EDITOR TEST FAILED" : "editor test passed");
     return bad != 0;
 }

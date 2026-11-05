@@ -198,7 +198,7 @@ at 1..3 and hides 6 5 8: what it sets still plays the right kit, and the device 
 
 | cmd | Request args | Reply args |
 | --- | --- | --- |
-| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) ; older firmware ends earlier |
+| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) and (screen link, not in Skiff 2.2) `56 01 1` (SCREEN, SCREEN_GOTO, WATCH bit 2; "Screen link" below) ; older firmware ends earlier |
 | 2 GET | scope, id | scope, id, v14 |
 | 3 SET | scope, id, v14 | scope, id, v14 (the value after clamping). Setting global `G_ENGSEL` (id from DESC label "ENG") changes the engine: its defaults, then its first preset (as on the device) |
 | 4 DUMP | — | engine, preset, then P_COUNT × v14 (the selected track), then G_COUNT × v14 (globals) |
@@ -219,7 +219,7 @@ at 1..3 and hides 6 5 8: what it sets still plays the right kit, and the device 
 | 19 UP_STORE | slot, name | slot, rc. Stores the current sound: engine, parameters, the first 16 sequencer steps as the pattern (TIE steps → flag 4) |
 | 20 UP_LOAD | slot | slot, rc (0 ok, 1 empty/invalid). Applies its sound (not its pattern; the steps stay) |
 | 21 UP_ERASE | slot | slot, rc |
-| 22 WATCH | on (0/1; v4: 3 = also `TRACK_CHANGED`) | on (0/1; v4 firmware: 3 when 3 was asked for). While on, the device pushes cmds 23, 24, 26 (and 32 with bit 1) |
+| 22 WATCH | on (0/1; v4: 3 = also `TRACK_CHANGED`; screen link: bit 2 = also `SCREEN`) | on (0/1; v4 firmware: 3 when 3 was asked for; screen link: bit 2 set when asked for). While on, the device pushes cmds 23, 24, 26 (and 32 with bit 1, 90 with bit 2) |
 | 23 CHANGED (push) | — | scope, id, v14 |
 | 24 RELOAD (push) | — | engine, preset, then (v3) the selected track |
 | 25 PING | — | 0 |
@@ -1133,3 +1133,44 @@ device gone at ~0.3 s, the MIDI port gone at ~0.57 s and back at ~1.15 s; ON -> 
 at ~0.6 s while the MIDI port was not seen to disappear at all (so do not wait for a disconnect event: after
 a real change, wait ~1.5 s and open again). What the editor sends in that window is lost, `WATCH` ends with the
 bus reset (send `INFO` and `WATCH` again after reconnecting), and a backup in progress answers rc 5 (stale).
+
+## Screen link (90, 91; the fm1-ipad patch, not in Skiff 2.2)
+
+An editor that follows the FM-1's screen (Jib, the iPad app) and opens its pages. It is a patch on Skiff 2.2
+(`skiff/0001-screen-link.patch` in the fm1-ipad repository); stock Skiff answers neither command and has no
+`56 01` tag. The numbers and the first four bytes of the state are those of the same patch on SLOOP 2.8.4 (its
+`UI`, `UI_GOTO`), with Skiff's own page and layer numbers. INFO advertises `56 01 1` after `58 01` (last: Skiff's own
+editor reads up to `58 01` only; bit 0: SCREEN, SCREEN_GOTO, WATCH bit 2).
+
+| cmd | Request args | Reply args |
+| --- | --- | --- |
+| 90 SCREEN | none | home (0/1), page (index into `PAGES`, `params.c`), layer (0 none, 1 FX, 2 GLO, 3 SCL, 4 EDIT, 5 SEQ, 6 REC, 7 PERF: `LAYER_*`, `ui.c`), menu (0 off, 1 the list, 2 ABOUT), the selected track (0..NTRK−1), flags (bit 0 HOME shows the scope, bit 1 the layer is locked open, bit 2 HOME is held: SHIFT's map) |
+| 91 SCREEN_GOTO | page (0..NPAGES−1), or 127 (HOME) | as SCREEN, after the change |
+
+- **Pushes.** While `WATCH` was sent with bit 2 (`WATCH 7`, or 5), the device pushes `SCREEN` whenever one of its
+  six bytes changes: a page or family button, SELECT walking the family, a layer button held (its map open) and let
+  go, a layer locked, HOME held (SHIFT, then the MENU), the MENU closed, another track selected (the device's or the
+  editor's `TRACK`), a page closing itself. `WATCH` with bit 2 newly asked for pushes the state at once; `WATCH 7`
+  while already watching with it does not push again. The state the editor was told (a `SCREEN` or `SCREEN_GOTO`
+  reply) is not pushed back. Like every push it goes out only into a half-empty send queue, and watching ends 3 s
+  after the last request (send `PING` about every 1 s).
+- **Page numbers** are this firmware's `PAGES` order, which can change between releases: ENV 0, ENV 2 1, LFO 2, LFO 2 3,
+  MOD 4, FX 5, DRIVE 6, INSERT 7, INSERT 2 8, SLICER 9, DUCK 10, SCALE 11, CHORD 12, FOLLOW 13, EDIT 1 14, EDIT 2 15,
+  OPERATOR 16, ALL OPS 17, LANES 18, SOUND 19, LANE MIX 20, SLICES 21, SAMPLES 22, OP1 ENV..OP4 ENV 23..26, OP LEVEL 27,
+  VOICE 28, VOICE 2 29, MIXER 30, DELAY 31, REVERB 32, CHORUS 33, GLOBAL 34, PRESETS 35, USER 36, PATTERNS 37,
+  PROJECT 38, ARP 39, ARP 2 40, NOTES 41, FEEL 42, PATTERN 43, AUTOMATION 44, SONG 45. The buttons' families: FX
+  5..10, SCL 11..13, ENV 0..1, LFO 2..4, EDIT 14..29 (the ones the track's engine shows), GLO 30..34, SAVE 35..38, ARP
+  39..40, SEQ 41..45. `page` keeps its value while `home` is 1 (the page HOME was opened from).
+- **SCREEN_GOTO** opens the page as its family's button would land on it: the MENU closes (its settings kept, as
+  when it closes on the device), a locked layer closes (as another page button closes it), the family remembers the
+  page, and the page starts as when it is entered on the device (NOTES' and FEEL's sequencer mode, AUTOMATION's +
+  ADD LOCK). 127 goes HOME, as a HOME tap. Refused, with the state as it is: a page past `NPAGES`, a page the selected
+  track's engine does not show (LANES off DRUM, OPERATOR off FM6, ...), a dialog open (`OVERWRITE?`, `CLEAR?`). A
+  layer button held on the device stays held.
+- An editor that never sends bit 2, 90 or 91 sees no difference: no new pushes, the replies to `WATCH` as before
+  (bits 0 and 1).
+
+Example (bytes in hex): `F0 7D 46 4C 16 07 F7` (`WATCH 7`) answers `F0 7D 46 4C 16 07 F7`, then pushes
+`F0 7D 46 4C 5A 00 05 00 00 00 00 F7` (the FX page, track 1). FX held: `.. 5A 00 05 01 00 00 00 F7`, let go: `.. 5A 00
+05 00 00 00 00 F7`. `F0 7D 46 4C 5B 1F F7` (`SCREEN_GOTO` DELAY) answers `F0 7D 46 4C 5B 00 1F 00 00 00 00 F7`;
+`F0 7D 46 4C 5B 12 F7` (LANES) on an ANALOG track answers the state unchanged.

@@ -62,6 +62,32 @@ static void ed_send(void)
 }
 static int32_t ed_rv(const uint8_t *p) { return (int32_t)(p[0] | p[1] << 7) - 8192; }
 
+/* (screen link, fm1-ipad; not in Skiff 2.2) the screen, so an editor can follow the FM-1 and open its pages
+ * (EDITOR_PROTOCOL.md "Screen link", INFO 56 01 1). The numbers and the first four bytes are those of the SLOOP patch's:
+ *   90 SCREEN       -> home 0/1, page (PAGES), layer (LAYER_*, 0 none), menu (0 off, 1 list, 2 about), the selected
+ *                      track, flags (bit 0 HOME's scope, bit 1 the layer locked open, bit 2 the SHIFT map); also pushed
+ *                      when one of them changes, while WATCH was sent with bit 2 (4)
+ *   91 SCREEN_GOTO  page (127 HOME) -> opens it as its button would, then the state, as SCREEN (as it was: a page the
+ *                      selected track's engine does not show, a dialog open)
+ * An editor that never sends bit 2, 90 or 91 sees no difference */
+enum { ED_SCREEN = 90, ED_SCREEN_GOTO };
+#define ED_SCR_N 6u
+static uint8_t ed_scr_on, ed_scr_last[ED_SCR_N];
+static void ed_scr_now(uint8_t *s)
+{
+    s[0] = ui.home;
+    s[1] = ui.page;
+    s[2] = ui.layer;
+    s[3] = ui.menu;
+    s[4] = song.sel;
+    s[5] = (uint8_t)((ui.home_scope != 0u) | (ui.lock != 0u) << 1 | (ui.shift != 0u) << 2);
+}
+static void ed_scr_reply(void)                           /* (what the editor is told: no push of it) */
+{
+    ed_scr_now(ed_scr_last);
+    ed_bs(ed_scr_last, ED_SCR_N);
+}
+
 /* ---- user sample slots (eng_sample.c): flash SMP_USER_BASE + k * SMP_USER_SIZE ----
  * BEGIN erases the header sector (the slot is invalid from then on), WRITE fills the data
  * (offset >= 512, erasing each further sector when the write reaches its start), END sends
@@ -234,6 +260,18 @@ static void ed_sync(void)                                /* main loop */
     if (!usb.config || usb.resets != ed_w.resets || now - ed_w.last_ms > 3000u) {
         ed_w.on = 0;                                     /* no host, USB reset, or 3 s without a request */
         return;
+    }
+    if (ed_scr_on) {                                     /* (screen link) the screen changed */
+        uint8_t s[ED_SCR_N];
+        ed_scr_now(s);
+        if (memcmp(s, ed_scr_last, ED_SCR_N)) {
+            if (!ed_room())
+                return;
+            ed_begin(ED_SCREEN);
+            ed_scr_reply();
+            ed_send();
+            n++;
+        }
     }
     if (sync_reload || ed_eng(TSEL) != ed_w.eng || TSEL->preset != ed_w.preset || song.sel != ed_w.sel) {
         if (!ed_room())
@@ -411,7 +449,7 @@ static int ed_args_ok(uint32_t cmd, const uint8_t *a, uint32_t n)
 {
     switch (cmd) {
     case ED_INFO: case ED_DUMP: case ED_SMP_INFO: case ED_PING:
-    case ED_UI_STATE: case ED_UI_PALETTES:
+    case ED_UI_STATE: case ED_UI_PALETTES: case ED_SCREEN:
         return !n;
     case ED_GET: case ED_DESC: case ED_PRESET: case ED_PROJECT: case ED_UP_LIST:
     case ED_TRACK_PARAM:
@@ -420,6 +458,7 @@ static int ed_args_ok(uint32_t cmd, const uint8_t *a, uint32_t n)
         return n == 4u;
     case ED_STEP_GET: case ED_NAMES: case ED_SMP_BEGIN: case ED_SMP_ERASE:
     case ED_UP_GET: case ED_UP_LOAD: case ED_UP_ERASE: case ED_WATCH: case ED_TRACK_DUMP: case ED_MENU_DESC:
+    case ED_SCREEN_GOTO:
         return n == 1u;
     case ED_MENU_SET:
         return n == 3u;
@@ -516,6 +555,26 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     if (ed_project_handle(cmd, a, na)) { ed_send(); return; }
     if (ed_song_handle(cmd, a, na)) { ed_send(); return; }
     switch (cmd) {
+    case ED_SCREEN:                                        /* (screen link) the state */
+        break;
+    case ED_SCREEN_GOTO:                                   /* (screen link) a page, as its button (or HOME) opens it */
+        if (ui.confirm || (a[0] != 127u && (a[0] >= NPAGES || !page_visible(a[0]))))
+            break;                                         /* (refused: the state as it is) */
+        if (ui.menu) {                                     /* (as ui_menu.c menu_close) */
+            ui.menu = 0;
+            settings_save();
+        }
+        ui.lock = 0;                                       /* (a locked layer closes, as at another page button: the
+                                                            * next pass lets its button go, ui_layer.c layer_gesture) */
+        if (a[0] == 127u) {
+            go_home();
+        } else {
+            ui.page = a[0];
+            ui.fam_last[page_group(a[0])] = a[0];
+            ui.home = 0;
+            page_entered();
+        }
+        break;
     case ED_MOTION: {
         track_t *t = &trk[a[0]]; uint32_t rc = 0;
         if (na > 1u && a[1] == 7u) {
@@ -555,9 +614,11 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             0x49, 1, P_COUNT & 127u, P_COUNT >> 7, P_E0 & 127u, P_E0 >> 7,   /* (Skiff 1.3) wide ids: P_COUNT and
                                          * P_E0 in two bytes; a track id from 128 on as scope 2 (ED_TID), a motion
                                          * record's from 128 on with bit 6 of its step byte */
-            0x58, 1, ED_SONG2};                         /* (2.0) the song's LIST2, NEW, COPY+, CHAIN, ONCE, the pool's
-                                                         * EMPTY, CLEAR UNUSED (editor_song.c; last: an editor before
-                                                         * reads up to 49 01 only) */
+            0x58, 1, ED_SONG2,                          /* (2.0) the song's LIST2, NEW, COPY+, CHAIN, ONCE, the pool's
+                                                         * EMPTY, CLEAR UNUSED (editor_song.c; an editor before reads up
+                                                         * to 49 01 only) */
+            0x56, 1, 1};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; last: Skiff's
+                                                         * own editor reads up to 58 01 only */
         ed_str("FELUCCA " FELUCCA_VERSION, 24);
         ed_b(NENGINES);
         ed_b(P_COUNT > 127u ? 127u : P_COUNT);            /* ((1.3) more: INFO 49 01) */
@@ -847,19 +908,23 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(a[0] >= UP_SLOTS ? 1u : ed_flash_stop() || up_put(a[0], 0) ? 2u : 0u);
         break;
     case ED_WATCH: {                                       /* on -> on */
-        uint32_t keep, v4was = ed_w.v4;
+        uint32_t keep, v4was = ed_w.v4, scr;
         if (na < 1u)
             return;
         keep = ed_w.on && ed_w.resets == usb.resets && (a[0] & 1u);   /* already watching: the changes not yet */
         ed_w.on = a[0] & 1u;                                          /* pushed stay pending (INFO 53 01 bit 0) */
         ed_w.v4 = (uint8_t)(ed_w.on && (a[0] & 2u));     /* v4: also TRACK_CHANGED; the reply says it is known */
+        scr = ed_w.on && (a[0] & 4u);                    /* (screen link) also SCREEN: newly asked, the state at once */
+        if (scr && !(keep && ed_scr_on))
+            ed_scr_last[0] = 0xFFu;
+        ed_scr_on = (uint8_t)scr;
         ed_w.resets = usb.resets;
         if (ed_w.on && !keep)
             ed_shadow();
         else if (keep && ed_w.v4 && !v4was)
             for (i = 0; i < ED_NT; i++)                    /* TRACK_CHANGED newly asked for: from the mix as it is */
                 ed_w.tv[i] = trk[i / 3u].p[ED_TIDS[i % 3u]];
-        ed_b(ed_w.on | ed_w.v4 << 1);
+        ed_b(ed_w.on | ed_w.v4 << 1 | ed_scr_on << 2);
         break;
     }
     case ED_PING:
@@ -973,6 +1038,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     default:
         return;
     }
+    if (cmd == ED_SCREEN || cmd == ED_SCREEN_GOTO)
+        ed_scr_reply();
     ed_send();
 }
 
