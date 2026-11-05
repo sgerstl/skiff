@@ -71,8 +71,12 @@ static int32_t ed_rv(const uint8_t *p) { return (int32_t)(p[0] | p[1] << 7) - 81
  *   91 SCREEN_GOTO  page (127 HOME) [, cursor] -> opens it as its button would (the cursor set, clamped), then the
  *                      state, as SCREEN (as it was: a page the selected track's engine does not show, a dialog open, a
  *                      cursor for a page that has none)
- * An editor that never sends bit 2, 90 or 91 sees no difference */
-enum { ED_SCREEN = 90, ED_SCREEN_GOTO };
+ *   92 METER        -> (56 01 3) each track's output level 0..127, as the MIXER's meter beside its fader (ed_met_tick);
+ *                      also pushed about 25 times a second while one changes (once a second while none does), while
+ *                      WATCH was sent with bit 3 (8); the lowest of the pushes: sent only into an empty queue, else
+ *                      dropped
+ * An editor that never sends bits 2 or 3, 90, 91 or 92 sees no difference */
+enum { ED_SCREEN = 90, ED_SCREEN_GOTO, ED_METER };
 #define ED_SCR_N 8u
 #define ED_NONE 127u
 static uint8_t ed_scr_on, ed_scr_last[ED_SCR_N];
@@ -140,6 +144,34 @@ static void ed_scr_reply(void)                           /* (what the editor is 
 {
     ed_scr_now(ed_scr_last);
     ed_bs(ed_scr_last, ED_SCR_N);
+}
+/* (56 01 3) METER: the MIXER's meter (ui_graph.c draw_tracks, meter_px) on 0..127 for the editor: each track's peak since
+ * the last tick (ui.c peak_take, its own: the screen's meters keep theirs), 60 dB over the scale (-54 .. +6 dB), 0 while
+ * muted, falling as the screen's do (one of its 30 px, 2 dB, a 16 ms frame) */
+#define ED_MET_MS 40u                                    /* ~25 a second */
+#define ED_MET_IDLE 1000u                                /* unchanged: once a second */
+static uint8_t ed_met_on, ed_met_due, ed_met[NTRK], ed_met_sent[NTRK];
+static uint32_t ed_met_t, ed_met_sent_t;
+static uint32_t ed_met_lvl(int32_t a)                    /* |sample| (Q15) -> 0..127, as meter_px -> px */
+{
+    int32_t lg = 0, v;
+    if (a < 64)
+        return 0;
+    while ((a >> lg) > 1)
+        lg++;
+    v = lg * 8 + (((a << 3) >> lg) & 7);                 /* 8 log2(a): 48 (-54 dB) .. 128 (+6 dB) */
+    return (uint32_t)clamp((v - 48) * 127 / 80, 0, 127);
+}
+static void ed_met_tick(uint32_t now)
+{
+    uint32_t c, fall = (now - ed_met_t) * 271u >> 10;    /* (127 / 30 a 16 ms frame) */
+    ed_met_t = now;
+    for (c = 0; c < NTRK; c++) {
+        int32_t pk = peak_take(PK_EDITOR, c), m = trk[c].p[P_MUTE] ? 0 : (int32_t)ed_met_lvl(pk);
+        if (m < (int32_t)ed_met[c] - (int32_t)fall)
+            m = (int32_t)ed_met[c] - (int32_t)fall;
+        ed_met[c] = (uint8_t)(m < 0 ? 0 : m);
+    }
 }
 
 /* ---- user sample slots (eng_sample.c): flash SMP_USER_BASE + k * SMP_USER_SIZE ----
@@ -327,6 +359,10 @@ static void ed_sync(void)                                /* main loop */
             n++;
         }
     }
+    if (ed_met_on && now - ed_met_t >= ED_MET_MS) {     /* (56 01 3) the levels: the lowest push, last below */
+        ed_met_tick(now);
+        ed_met_due = memcmp(ed_met, ed_met_sent, NTRK) || now - ed_met_sent_t >= ED_MET_IDLE;
+    }
     if (sync_reload || ed_eng(TSEL) != ed_w.eng || TSEL->preset != ed_w.preset || song.sel != ed_w.sel) {
         if (!ed_room())
             return;
@@ -384,6 +420,14 @@ static void ed_sync(void)                                /* main loop */
         ed_send();
         n++;
         ed_w.tpos = k + 1u;
+    }
+    if (ed_met_due && !n && so_w == so_r) {              /* (56 01 3) METER: only into an empty queue, nothing else */
+        ed_met_due = 0;                                  /* this pass; busy: this tick's dropped, the next one goes */
+        memcpy(ed_met_sent, ed_met, NTRK);
+        ed_met_sent_t = now;
+        ed_begin(ED_METER);
+        ed_bs(ed_met, NTRK);
+        ed_send();
     }
 }
 
@@ -503,7 +547,7 @@ static int ed_args_ok(uint32_t cmd, const uint8_t *a, uint32_t n)
 {
     switch (cmd) {
     case ED_INFO: case ED_DUMP: case ED_SMP_INFO: case ED_PING:
-    case ED_UI_STATE: case ED_UI_PALETTES: case ED_SCREEN:
+    case ED_UI_STATE: case ED_UI_PALETTES: case ED_SCREEN: case ED_METER:
         return !n;
     case ED_GET: case ED_DESC: case ED_PRESET: case ED_PROJECT: case ED_UP_LIST:
     case ED_TRACK_PARAM:
@@ -612,6 +656,9 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     switch (cmd) {
     case ED_SCREEN:                                        /* (screen link) the state */
         break;
+    case ED_METER:                                         /* (56 01 3) the levels as last pushed or ticked */
+        ed_bs(ed_met, NTRK);
+        break;
     case ED_SCREEN_GOTO:                                   /* (screen link) a page, as its button (or HOME) opens it */
         if (ui.confirm || (a[0] != 127u && (a[0] >= NPAGES || !page_visible(a[0]))) ||
             (na > 1u && (a[0] == 127u || ed_scr_cur(PAGES[a[0]].graph, &i) == ED_NONE)))
@@ -675,8 +722,9 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             0x58, 1, ED_SONG2,                          /* (2.0) the song's LIST2, NEW, COPY+, CHAIN, ONCE, the pool's
                                                          * EMPTY, CLEAR UNUSED (editor_song.c; an editor before reads up
                                                          * to 49 01 only) */
-            0x56, 1, 2};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; 2: the page's
-                                                         * cursor too; last: Skiff's own editor reads up to 58 01 only */
+            0x56, 1, 3};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; 2: the page's
+                                                         * cursor too; 3: METER, WATCH bit 3; last: Skiff's own editor
+                                                         * reads up to 58 01 only */
         ed_str("FELUCCA " FELUCCA_VERSION, 24);
         ed_b(NENGINES);
         ed_b(P_COUNT > 127u ? 127u : P_COUNT);            /* ((1.3) more: INFO 49 01) */
@@ -966,7 +1014,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(a[0] >= UP_SLOTS ? 1u : ed_flash_stop() || up_put(a[0], 0) ? 2u : 0u);
         break;
     case ED_WATCH: {                                       /* on -> on */
-        uint32_t keep, v4was = ed_w.v4, scr;
+        uint32_t keep, v4was = ed_w.v4, scr, met;
         if (na < 1u)
             return;
         keep = ed_w.on && ed_w.resets == usb.resets && (a[0] & 1u);   /* already watching: the changes not yet */
@@ -976,13 +1024,23 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         if (scr && !(keep && ed_scr_on))
             ed_scr_last[0] = 0xFFu;
         ed_scr_on = (uint8_t)scr;
+        met = ed_w.on && (a[0] & 8u);                    /* (56 01 3) also METER: newly asked, from silence, at once */
+        if (met && !(keep && ed_met_on)) {
+            for (i = 0; i < NTRK; i++)
+                (void)peak_take(PK_EDITOR, i);           /* (what built up while nobody asked: gone) */
+            memset(ed_met, 0, NTRK);
+            ed_met_t = fm1_ms;
+            ed_met_sent_t = fm1_ms - ED_MET_IDLE;
+        }
+        ed_met_on = (uint8_t)met;
+        ed_met_due &= ed_met_on;
         ed_w.resets = usb.resets;
         if (ed_w.on && !keep)
             ed_shadow();
         else if (keep && ed_w.v4 && !v4was)
             for (i = 0; i < ED_NT; i++)                    /* TRACK_CHANGED newly asked for: from the mix as it is */
                 ed_w.tv[i] = trk[i / 3u].p[ED_TIDS[i % 3u]];
-        ed_b(ed_w.on | ed_w.v4 << 1 | ed_scr_on << 2);
+        ed_b(ed_w.on | ed_w.v4 << 1 | ed_scr_on << 2 | ed_met_on << 3);
         break;
     }
     case ED_PING:

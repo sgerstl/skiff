@@ -2314,8 +2314,8 @@ static void draw_tracks(void)
             ts.meter[c] = 0;
     }
     for (c = 0; c < NTRK; c++) {                     /* every track's meter, shown or not ((Skiff phase 6) one scrolled */
-        int32_t m = trk[c].p[P_MUTE] ? 0 : meter_px(trk[c].peak);   /* in shows no old peak) */
-        trk[c].peak = 0;
+        int32_t pk = peak_take(PK_SCREEN, c), m = trk[c].p[P_MUTE] ? 0 : meter_px(pk);   /* in shows no old peak;
+                                                                                         * (screen link) ui.c */
         if (m < ts.meter[c] - 1)
             m = ts.meter[c] - 1;                     /* falls ~2 dB a frame */
         ts.meter[c] = (uint8_t)(m < 0 ? 0 : m);
@@ -2431,8 +2431,8 @@ static void qk_detector(int32_t cx, int32_t cy)
     qk_dotring(cx, cy, R * 76 / 100, 72, ux_mix(T_THEME, T_SURF, 50));
     for (k = 0; k < NTRK; k++) {
         track_t *t = &trk[k];
-        int32_t lv = t->p[P_MUTE] ? 0 : meter_px(t->peak) * 1000 / (TS_MH - 2);
-        t->peak = 0;                                 /* (a max-hold, as the MIXER reads it) */
+        int32_t pk = peak_take(PK_SCREEN, (uint32_t)k);   /* (a max-hold, as the MIXER reads it; (screen link) ui.c) */
+        int32_t lv = t->p[P_MUTE] ? 0 : meter_px(pk) * 1000 / (TS_MH - 2);
         qkd.lv[k] = (int16_t)(lv > qkd.lv[k] - fall ? lv : qkd.lv[k] - fall);
         if (t->hits != qkd.seen[k]) {                /* struck: a new event, in place of its older one */
             j = qkd.nx[k];

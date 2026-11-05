@@ -200,8 +200,8 @@ static int preferences(void)
     uint8_t a[4] = {0, 3, 0, 0};                          /* (THEME: 3, CRYPT) */
     reset();
     uint32_t n = request(ED_INFO, a, 0);
-    bad += check("INFO (screen link) its tag last: 56 01 02 (SCREEN, SCREEN_GOTO, WATCH bit 2, the page's cursor)",
-        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 2);
+    bad += check("INFO (screen link) its tag last: 56 01 03 (SCREEN, SCREEN_GOTO, WATCH bit 2, the cursor, METER)",
+        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 3);
     n -= 3u;                                              /* (the tags before it, as they were) */
     bad += check("INFO (2.0) the song's tag next: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
         host_wire[n - 4] == 0x58 && host_wire[n - 3] == 1 && host_wire[n - 2] == ED_SONG2);
@@ -1718,6 +1718,68 @@ static int screen_cursor(void)
     bad += check("AUTOMATION: 0 the page's own row", host_wire[11] == 0 && ui.ev_top);
     return bad;
 }
+/* (56 01 3) METER (92), WATCH bit 3: the MIXER's meters, 0..127, pushed while they move, lowest of the pushes */
+static int meter(void)
+{
+    int bad = 0;
+    uint8_t a[2] = {15, 0};
+    const uint8_t *x = 0;
+    uint32_t i, k, pushes, fell, zero_at = 0;
+    reset();
+    usb.resets = 0;
+    trk[4].peak = 30000;                                 /* (built up before anyone asked: not sent) */
+    request(ED_WATCH, a, 1);
+    bad += check("WATCH 15: 15 (METER known)", host_wire[5] == 15);
+    sync_pass(); sync_pass();
+    bad += check("METER at once, from silence: six zeros",
+        wire_frames(ED_METER, &x) == 1u && !x[0] && !x[1] && !x[2] && !x[3] && !x[4] && !x[5] && x[6] == 0xF7);
+    trk[2].peak = 16384;                                 /* (-6 dB: 8 log2 = 112, (112 - 48) * 127 / 80 = 101) */
+    for (i = 0, k = 0; i < 3u && !k; i++) { sync_pass(); k = wire_frames(ED_METER, &x); }
+    bad += check("a track playing at -6 dB: 101, the others 0", k == 1u && x[2] == 101 && !x[0] && !x[1] && !x[3]);
+    for (i = 0, pushes = 0, fell = 1, k = 101; i < 40u; i++) {   /* 1.2 s of silence: falls, ~10 a 40 ms tick */
+        sync_pass();
+        if (wire_frames(ED_METER, &x)) {
+            pushes++;
+            fell &= x[2] < k;
+            k = x[2];
+            if (!k && !zero_at) zero_at = fm1_ms;
+        }
+    }
+    bad += check("silence: falls tick by tick to 0 (about 0.5 s), then nothing", fell && zero_at && pushes >= 5u && pushes <= 14u);
+    for (i = 0, pushes = 0; i < 33u; i++) { sync_pass(); pushes += wire_frames(ED_METER, &x); }
+    bad += check("all silent: once a second", pushes == 1u && !x[2]);
+    request(ED_PING, a, 0);                              /* (watching ends 3 s after the last request) */
+    trk[3].peak = 20000;
+    for (i = 0; i < 3u; i++) sync_pass();
+    bad += check("the screen's meters keep their peak when METER took it (ui.c peak_take)", peak_take(PK_SCREEN, 3) == 20000);
+    trk[1].p[P_MUTE] = 1; trk[1].peak = 30000;
+    for (i = 0, k = 0; i < 3u; i++) { sync_pass(); if (wire_frames(ED_METER, &x)) k |= x[1]; }
+    bad += check("a muted track: 0, as on the screen", !k);
+    trk[1].p[P_MUTE] = 0;
+    for (i = 0; i < 40u; i++) sync_pass();
+    request(ED_PING, a, 0);
+    trk[0].peak = 16384;
+    TSEL->p[P_PAN] = 20;                                 /* (a value pushed in the same pass) */
+    fm1_ms += 40u; host_wire_n = 0; ed_sync(); host_drain();
+    k = wire_frames(ED_METER, &x);
+    bad += check("another push in the pass: METER waits (CHANGED goes)", !k && wire_frames(ED_CHANGED, &x) >= 1u);
+    sync_pass();
+    bad += check("   then goes, the level as it is", wire_frames(ED_METER, &x) == 1u && x[0] == 101);
+    so_w = so_r + 1u;                                    /* (a packet not taken yet: the queue isn't empty) */
+    trk[0].peak = 30000;
+    fm1_ms += 40u; host_wire_n = 0; ed_sync();
+    k = so_w - so_r;
+    so_w = so_r;
+    bad += check("a queue not empty: no METER", k == 1u);
+    request(ED_METER, a, 0);
+    bad += check("METER asked: the six levels", host_wire[4] == ED_METER && host_wire[11] == 0xF7 && host_wire[5] > 101);
+    a[0] = 7; request(ED_WATCH, a, 1);
+    bad += check("WATCH 7: 7 (METER off)", host_wire[5] == 7);
+    trk[0].peak = 30000;
+    for (i = 0, pushes = 0; i < 40u; i++) { sync_pass(); pushes += wire_frames(ED_METER, &x); }
+    bad += check("WATCH 7: no METER", !pushes);
+    return bad;
+}
 static int screen_link(void)
 {
     int bad = 0;
@@ -1792,7 +1854,7 @@ static int screen_link(void)
     ui.page = (uint8_t)fx;
     a[0] = 0; request(ED_SCREEN_GOTO, a, 0);
     bad += check("SCREEN_GOTO without its page: no reply", !host_wire_n);
-    return bad + screen_cursor();
+    return bad + screen_cursor() + meter();
 }
 
 int main(void)

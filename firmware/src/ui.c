@@ -720,6 +720,23 @@ static uint32_t page_vis_first(uint32_t fam)
             return i;
     return NPAGES;
 }
+/* (screen link, fm1-ipad; not in Skiff 2.2) each track's output peak, fx.c's max-hold in trk[].peak, for two readers:
+ * the screen's meters (MIXER, QUARK's detector) and the editor's METER (editor.c). Each gets the highest since its own
+ * last take, so the editor reading it takes nothing from the screen's */
+enum { PK_SCREEN, PK_EDITOR };
+static int32_t pk_held[2][NTRK];
+static int32_t peak_take(uint32_t who, uint32_t c)
+{
+    int32_t p = trk[c].peak, r;
+    trk[c].peak = 0;
+    if (p > pk_held[PK_SCREEN][c])
+        pk_held[PK_SCREEN][c] = p;
+    if (p > pk_held[PK_EDITOR][c])
+        pk_held[PK_EDITOR][c] = p;
+    r = pk_held[who][c];
+    pk_held[who][c] = 0;
+    return r;
+}
 /* (params.c page_desc: LANES' LEVEL; (2.0, #36) LANE MIX's: on DRUM-X the sound sheet's lane, ui_dx.c) */
 static uint8_t *page_lane_p(void) { return TSEL->eng_req % NENGINES == ENGI_DRUMX ? &dx_ui_lane : &ui.lane; }
 static uint32_t page_lane(void) { return *page_lane_p() % 8u; }
