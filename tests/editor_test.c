@@ -200,8 +200,8 @@ static int preferences(void)
     uint8_t a[4] = {0, 3, 0, 0};                          /* (THEME: 3, CRYPT) */
     reset();
     uint32_t n = request(ED_INFO, a, 0);
-    bad += check("INFO (screen link) its tag last: 56 01 01 (SCREEN, SCREEN_GOTO, WATCH bit 2)",
-        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 1);
+    bad += check("INFO (screen link) its tag last: 56 01 02 (SCREEN, SCREEN_GOTO, WATCH bit 2, the page's cursor)",
+        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 2);
     n -= 3u;                                              /* (the tags before it, as they were) */
     bad += check("INFO (2.0) the song's tag next: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
         host_wire[n - 4] == 0x58 && host_wire[n - 3] == 1 && host_wire[n - 2] == ED_SONG2);
@@ -1675,7 +1675,48 @@ static uint32_t page_named(const char *t)
 static int screen_is(const uint8_t *x, uint32_t home, uint32_t page, uint32_t layer, uint32_t menu, uint32_t sel,
                      uint32_t flags)
 {
-    return x[0] == home && x[1] == page && x[2] == layer && x[3] == menu && x[4] == sel && x[5] == flags && x[6] == 0xF7;
+    return x[0] == home && x[1] == page && x[2] == layer && x[3] == menu && x[4] == sel && x[5] == flags &&
+           x[6] == ED_NONE && x[7] == ED_NONE && x[8] == 0xF7;   /* (pages without a cursor) */
+}
+/* (56 01 2) the page's cursor: SCREEN's bytes 7, 8; SCREEN_GOTO's optional second byte */
+static int screen_cursor(void)
+{
+    int bad = 0;
+    uint8_t a[2] = {7, 0};
+    const uint8_t *x = 0;
+    uint32_t mod = page_named("MOD"), fx = page_named("FX"), pats = page_named("PATTERNS"), notes = page_named("NOTES"),
+             song_pg = page_named("SONG"), autom = page_named("AUTOMATION"), user = page_named("USER");
+    reset();
+    usb.resets = 0;
+    request(ED_WATCH, a, 1);
+    sync_pass();                                         /* (the state at once) */
+    a[0] = (uint8_t)mod; request(ED_SCREEN_GOTO, a, 1);
+    bad += check("SCREEN on MOD: the route, no second", host_wire[11] == mod_ui_route && host_wire[12] == ED_NONE && !sync_pass());
+    mod_ui_route = 3;                                    /* (KNOB 1 turned on the device) */
+    sync_pass();
+    bad += check("MOD's route turned: pushed", wire_frames(ED_SCREEN, &x) == 1u && x[1] == mod && x[6] == 3 && !sync_pass());
+    a[1] = 8; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("SCREEN_GOTO MOD, route 8: set, no push of it", host_wire[11] == 8 && mod_ui_route == 8 && !sync_pass());
+    a[1] = 100; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("SCREEN_GOTO MOD, route 100: clamped to 10", host_wire[11] == MOD_ROUTES - 1u && mod_ui_route == MOD_ROUTES - 1u);
+    a[0] = (uint8_t)fx; a[1] = 2; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("SCREEN_GOTO FX with a cursor: refused (FX has none), still MOD", host_wire[6] == mod && ui.page == mod);
+    a[0] = 127; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("SCREEN_GOTO HOME with a cursor: refused", host_wire[5] == 0 && !ui.home);
+    a[0] = (uint8_t)pats; a[1] = 40; ui.bact = BA_EMPTY; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("PATTERNS: the pattern (40), then the ACTION", host_wire[11] == 40 && host_wire[12] == BA_EMPTY && ui.bslot == 40);
+    a[0] = (uint8_t)user; a[1] = 99; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("USER: the slot, clamped to the last", host_wire[11] == UP_SLOTS - 1u && ui.uslot == UP_SLOTS - 1u);
+    a[0] = (uint8_t)notes; a[1] = 5; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("NOTES: the cursor's step, first and last of the selection", host_wire[11] == 5 && host_wire[12] == 5 && ui.cursor == 5);
+    nsel.a1 = 9;                                         /* (a selection 5..8 made on the device) */
+    sync_pass();
+    bad += check("NOTES: a selection pushed (5..8)", wire_frames(ED_SCREEN, &x) == 1u && x[6] == 5 && x[7] == 8);
+    a[0] = (uint8_t)song_pg; a[1] = 12; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("SONG: the entry", host_wire[11] == 12 && sg.entry == 12);
+    a[0] = (uint8_t)autom; a[1] = 0; request(ED_SCREEN_GOTO, a, 2);
+    bad += check("AUTOMATION: 0 the page's own row", host_wire[11] == 0 && ui.ev_top);
+    return bad;
 }
 static int screen_link(void)
 {
@@ -1687,7 +1728,7 @@ static int screen_link(void)
     usb.resets = 0;
     ui.page = (uint8_t)fx;
     bad += check("SCREEN: home, page, layer, menu, track, flags",
-        request(ED_SCREEN, a, 0) == 12u && host_wire[4] == ED_SCREEN && screen_is(host_wire + 5, 0, fx, 0, 0, 0, 0));
+        request(ED_SCREEN, a, 0) == 14u && host_wire[4] == ED_SCREEN && screen_is(host_wire + 5, 0, fx, 0, 0, 0, 0));
     request(ED_WATCH, a, 1);
     bad += check("WATCH 3: the reply without bit 2", host_wire[5] == 3 && !ed_scr_on);
     ui.page = (uint8_t)mixer; ui.layer = LAYER_FX; ui.menu = 1;
@@ -1751,7 +1792,7 @@ static int screen_link(void)
     ui.page = (uint8_t)fx;
     a[0] = 0; request(ED_SCREEN_GOTO, a, 0);
     bad += check("SCREEN_GOTO without its page: no reply", !host_wire_n);
-    return bad;
+    return bad + screen_cursor();
 }
 
 int main(void)

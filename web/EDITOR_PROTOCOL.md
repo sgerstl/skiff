@@ -198,7 +198,7 @@ at 1..3 and hides 6 5 8: what it sets still plays the right kit, and the device 
 
 | cmd | Request args | Reply args |
 | --- | --- | --- |
-| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) and (screen link, not in Skiff 2.2) `56 01 1` (SCREEN, SCREEN_GOTO, WATCH bit 2; "Screen link" below) ; older firmware ends earlier |
+| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) and (screen link, not in Skiff 2.2) `56 01 v` (SCREEN, SCREEN_GOTO, WATCH bit 2; v 2: the page's cursor; "Screen link" below) ; older firmware ends earlier |
 | 2 GET | scope, id | scope, id, v14 |
 | 3 SET | scope, id, v14 | scope, id, v14 (the value after clamping). Setting global `G_ENGSEL` (id from DESC label "ENG") changes the engine: its defaults, then its first preset (as on the device) |
 | 4 DUMP | — | engine, preset, then P_COUNT × v14 (the selected track), then G_COUNT × v14 (globals) |
@@ -1140,17 +1140,18 @@ An editor that follows the FM-1's screen (Jib, the iPad app) and opens its pages
 (`skiff/0001-screen-link.patch` in the fm1-ipad repository); stock Skiff answers neither command and has no
 `56 01` tag. The numbers and the first four bytes of the state are those of the same patch on SLOOP 2.8.4 (its
 `UI`, `UI_GOTO`), with Skiff's own page and layer numbers. INFO advertises `56 01 1` after `58 01` (last: Skiff's own
-editor reads up to `58 01` only; bit 0: SCREEN, SCREEN_GOTO, WATCH bit 2).
+editor reads up to `58 01` only). Its byte: 1, the six bytes below; 2, the page's cursor after them and
+SCREEN_GOTO's cursor. Read SCREEN's reply by its length: a later version only appends.
 
 | cmd | Request args | Reply args |
 | --- | --- | --- |
-| 90 SCREEN | none | home (0/1), page (index into `PAGES`, `params.c`), layer (0 none, 1 FX, 2 GLO, 3 SCL, 4 EDIT, 5 SEQ, 6 REC, 7 PERF: `LAYER_*`, `ui.c`), menu (0 off, 1 the list, 2 ABOUT), the selected track (0..NTRK−1), flags (bit 0 HOME shows the scope, bit 1 the layer is locked open, bit 2 HOME is held: SHIFT's map) |
-| 91 SCREEN_GOTO | page (0..NPAGES−1), or 127 (HOME) | as SCREEN, after the change |
+| 90 SCREEN | none | home (0/1), page (index into `PAGES`, `params.c`), layer (0 none, 1 FX, 2 GLO, 3 SCL, 4 EDIT, 5 SEQ, 6 REC, 7 PERF: `LAYER_*`, `ui.c`), menu (0 off, 1 the list, 2 ABOUT), the selected track (0..NTRK−1), flags (bit 0 HOME shows the scope, bit 1 the layer is locked open, bit 2 HOME is held: SHIFT's map), then (`56 01 2`) the page's cursor and its second (127: none; table below) |
+| 91 SCREEN_GOTO | page (0..NPAGES−1), or 127 (HOME) [, cursor (`56 01 2`)] | as SCREEN, after the change |
 
 - **Pushes.** While `WATCH` was sent with bit 2 (`WATCH 7`, or 5), the device pushes `SCREEN` whenever one of its
   six bytes changes: a page or family button, SELECT walking the family, a layer button held (its map open) and let
   go, a layer locked, HOME held (SHIFT, then the MENU), the MENU closed, another track selected (the device's or the
-  editor's `TRACK`), a page closing itself. `WATCH` with bit 2 newly asked for pushes the state at once; `WATCH 7`
+  editor's `TRACK`), a page closing itself, (`56 01 2`) the page's cursor moved. `WATCH` with bit 2 newly asked for pushes the state at once; `WATCH 7`
   while already watching with it does not push again. The state the editor was told (a `SCREEN` or `SCREEN_GOTO`
   reply) is not pushed back. Like every push it goes out only into a half-empty send queue, and watching ends 3 s
   after the last request (send `PING` about every 1 s).
@@ -1167,10 +1168,33 @@ editor reads up to `58 01` only; bit 0: SCREEN, SCREEN_GOTO, WATCH bit 2).
   ADD LOCK). 127 goes HOME, as a HOME tap. Refused, with the state as it is: a page past `NPAGES`, a page the selected
   track's engine does not show (LANES off DRUM, OPERATOR off FM6, ...), a dialog open (`OVERWRITE?`, `CLEAR?`). A
   layer button held on the device stays held.
+- **The page's cursor** (`56 01 2`): what KNOB 1 (on NOTES and FEEL the step keys) picks on a page instead of setting a
+  value, which the device highlights and an editor could not see. Counted from 0 (the screen counts MOD's routes, the
+  samples and the slots from 1). SCREEN_GOTO's second byte sets the first cursor, clamped to its range; on a page
+  without one (or with 127, HOME) the request is refused, the state as it is. The second cursor is read only.
+
+| Page | Cursor | Second |
+| --- | --- | --- |
+| MOD | the route, 0..10 (0..6 the fixed routings, 7..10 the matrix's slots) | — |
+| LANES, LANE MIX | the lane, 0..7 | — |
+| SOUND (DRUM-X) | the sound, 0..7 (BD .. CB) | the sheet's window, 0..3 |
+| OPERATOR (FM6) | the operator, 0..5 (OP1..OP6) | the sheet's window, 0..4 |
+| ALL OPS (FM6) | — | the sheet's window, 0..4 |
+| SLICES | the marker, 0..the slice count | — |
+| SAMPLES | the sample, 0..15 (kept within the slot's) | — |
+| USER | the slot, 0..31 | — |
+| PATTERNS | the pattern, 0..63 | the ACTION: 0 CLEAR, 1 EMPTY, 2 UNUSED |
+| NOTES, FEEL | the selection's first step, 0..63 (SCREEN_GOTO: the cursor, the selection gone) | its last step |
+| AUTOMATION | the row: 0 the page's own (PLAY, CLEAR), 1.. the list's | — |
+| SONG | the entry, 0..15 (A..P) | — |
+
+  Every other page: 127, 127. PRESETS has none: its KNOB 1 loads the sound (`RELOAD`). The cursor is the page's
+  (`page`), also while `home` is 1.
 - An editor that never sends bit 2, 90 or 91 sees no difference: no new pushes, the replies to `WATCH` as before
   (bits 0 and 1).
 
 Example (bytes in hex): `F0 7D 46 4C 16 07 F7` (`WATCH 7`) answers `F0 7D 46 4C 16 07 F7`, then pushes
-`F0 7D 46 4C 5A 00 05 00 00 00 00 F7` (the FX page, track 1). FX held: `.. 5A 00 05 01 00 00 00 F7`, let go: `.. 5A 00
-05 00 00 00 00 F7`. `F0 7D 46 4C 5B 1F F7` (`SCREEN_GOTO` DELAY) answers `F0 7D 46 4C 5B 00 1F 00 00 00 00 F7`;
-`F0 7D 46 4C 5B 12 F7` (LANES) on an ANALOG track answers the state unchanged.
+`F0 7D 46 4C 5A 00 05 00 00 00 00 7F 7F F7` (the FX page, track 1, no cursor). FX held: `.. 5A 00 05 01 00 00 00 7F 7F
+F7`, let go: `.. 5A 00 05 00 00 00 00 7F 7F F7`. `F0 7D 46 4C 5B 1F F7` (`SCREEN_GOTO` DELAY) answers
+`F0 7D 46 4C 5B 00 1F 00 00 00 00 7F 7F F7`; `F0 7D 46 4C 5B 12 F7` (LANES) on an ANALOG track answers the state
+unchanged. `F0 7D 46 4C 5B 04 09 F7` (MOD, route 9: the screen's 10) answers `.. 5B 00 04 00 00 00 00 09 7F F7`.

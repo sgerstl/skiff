@@ -63,24 +63,78 @@ static void ed_send(void)
 static int32_t ed_rv(const uint8_t *p) { return (int32_t)(p[0] | p[1] << 7) - 8192; }
 
 /* (screen link, fm1-ipad; not in Skiff 2.2) the screen, so an editor can follow the FM-1 and open its pages
- * (EDITOR_PROTOCOL.md "Screen link", INFO 56 01 1). The numbers and the first four bytes are those of the SLOOP patch's:
+ * (EDITOR_PROTOCOL.md "Screen link", INFO 56 01 2). The numbers and the first four bytes are those of the SLOOP patch's:
  *   90 SCREEN       -> home 0/1, page (PAGES), layer (LAYER_*, 0 none), menu (0 off, 1 list, 2 about), the selected
- *                      track, flags (bit 0 HOME's scope, bit 1 the layer locked open, bit 2 the SHIFT map); also pushed
- *                      when one of them changes, while WATCH was sent with bit 2 (4)
- *   91 SCREEN_GOTO  page (127 HOME) -> opens it as its button would, then the state, as SCREEN (as it was: a page the
- *                      selected track's engine does not show, a dialog open)
+ *                      track, flags (bit 0 HOME's scope, bit 1 the layer locked open, bit 2 the SHIFT map), (56 01 2)
+ *                      the page's cursor and its second (ed_scr_cur; 127 none); also pushed when one of them changes,
+ *                      while WATCH was sent with bit 2 (4)
+ *   91 SCREEN_GOTO  page (127 HOME) [, cursor] -> opens it as its button would (the cursor set, clamped), then the
+ *                      state, as SCREEN (as it was: a page the selected track's engine does not show, a dialog open, a
+ *                      cursor for a page that has none)
  * An editor that never sends bit 2, 90 or 91 sees no difference */
 enum { ED_SCREEN = 90, ED_SCREEN_GOTO };
-#define ED_SCR_N 6u
+#define ED_SCR_N 8u
+#define ED_NONE 127u
 static uint8_t ed_scr_on, ed_scr_last[ED_SCR_N];
+/* the page's cursor: what KNOB 1 (or PRESETS, the keys) picks there instead of a value, and a second pick; ED_NONE where
+ * there is none. MOD the route, LANES / LANE MIX the lane, SOUND the sound and the window, OPERATOR the operator and the
+ * window, ALL OPS the window, SLICES the marker, SAMPLES the sample (0..), USER the slot, PATTERNS the pattern and the
+ * ACTION, NOTES / FEEL the selection's first and last step, AUTOMATION the row (0 the page's own, then the list's from 1),
+ * SONG the entry */
+static uint32_t ed_scr_cur(uint32_t g, uint32_t *c2)
+{
+    *c2 = ED_NONE;
+    switch (g) {
+    case GR_MOD: return mod_ui_route;
+    case GR_LANES: case GR_LMIX: return page_lane();
+    case GR_DXSND: *c2 = dx_ui_win & 127u; return dx_ui_lane & 7u;
+    case GR_FMOP: *c2 = fm_ui[1] & 127u; return fm_ui[0] % 6u;
+    case GR_FMALL: *c2 = fm_ui[2] & 127u; return ED_NONE;
+#if FELUCCA_SLICE
+    case GR_SLICES: return slice_sel();
+#endif
+    case GR_SMIX: return smx_sel > 0 ? (uint32_t)smx_sel - 1u : 0u;
+    case GR_USER: return ui.uslot;
+    case GR_BANK: *c2 = ui.bact; return ui.bslot % NPAT;
+    case GR_ROLL: case GR_FEEL: *c2 = sel_hi(); return sel_lo();
+    case GR_EVENTS: return ui.ev_top ? 0u : ui.ev_row + 1u;
+    case GR_SONG: return sg.entry % NENT;
+    default: return ED_NONE;
+    }
+}
+/* SCREEN_GOTO's cursor c on page g, clamped; 1 = g has none */
+static int ed_scr_set(uint32_t g, int32_t c)
+{
+    switch (g) {
+    case GR_MOD: mod_ui_route = (uint8_t)clamp(c, 0, MOD_ROUTES - 1); break;
+    case GR_LANES: case GR_LMIX: *page_lane_p() = (uint8_t)clamp(c, 0, 7); break;
+    case GR_DXSND: dx_ui_lane = (uint8_t)clamp(c, 0, 7); break;
+    case GR_FMOP: fm_ui[0] = (uint8_t)clamp(c, 0, 5); break;
+#if FELUCCA_SLICE
+    case GR_SLICES: sp.sel = (uint8_t)clamp(c, 0, (int32_t)slice_count()); break;
+#endif
+    case GR_SMIX: smx_sel = (int16_t)(clamp(c, 0, 15) + 1); break;   /* (smx_zone keeps it within the slot's) */
+    case GR_USER: ui.uslot = (uint8_t)clamp(c, 0, UP_SLOTS - 1); break;
+    case GR_BANK: ui.bslot = (uint8_t)clamp(c, 0, NPAT - 1); break;
+    case GR_ROLL: case GR_FEEL: cursor_set(c); break;   /* (the selection goes: one step) */
+    case GR_EVENTS: ui.ev_top = !c; ui.ev_row = (uint8_t)(c ? c - 1 : 0); break;   /* (ev_row clamps it to the count) */
+    case GR_SONG: sg.entry = (uint8_t)clamp(c, 0, NENT - 1); break;
+    default: return 1;
+    }
+    ui.force = 1;
+    return 0;
+}
 static void ed_scr_now(uint8_t *s)
 {
+    uint32_t c2;
     s[0] = ui.home;
     s[1] = ui.page;
     s[2] = ui.layer;
     s[3] = ui.menu;
     s[4] = song.sel;
     s[5] = (uint8_t)((ui.home_scope != 0u) | (ui.lock != 0u) << 1 | (ui.shift != 0u) << 2);
+    s[6] = (uint8_t)ed_scr_cur(PAGES[ui.page % NPAGES].graph, &c2);
+    s[7] = (uint8_t)c2;
 }
 static void ed_scr_reply(void)                           /* (what the editor is told: no push of it) */
 {
@@ -458,8 +512,9 @@ static int ed_args_ok(uint32_t cmd, const uint8_t *a, uint32_t n)
         return n == 4u;
     case ED_STEP_GET: case ED_NAMES: case ED_SMP_BEGIN: case ED_SMP_ERASE:
     case ED_UP_GET: case ED_UP_LOAD: case ED_UP_ERASE: case ED_WATCH: case ED_TRACK_DUMP: case ED_MENU_DESC:
-    case ED_SCREEN_GOTO:
         return n == 1u;
+    case ED_SCREEN_GOTO:                               /* (screen link) page [, cursor] */
+        return n == 1u || n == 2u;
     case ED_MENU_SET:
         return n == 3u;
     case ED_TRANSPORT: case ED_PROJ_NAME:
@@ -558,7 +613,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     case ED_SCREEN:                                        /* (screen link) the state */
         break;
     case ED_SCREEN_GOTO:                                   /* (screen link) a page, as its button (or HOME) opens it */
-        if (ui.confirm || (a[0] != 127u && (a[0] >= NPAGES || !page_visible(a[0]))))
+        if (ui.confirm || (a[0] != 127u && (a[0] >= NPAGES || !page_visible(a[0]))) ||
+            (na > 1u && (a[0] == 127u || ed_scr_cur(PAGES[a[0]].graph, &i) == ED_NONE)))
             break;                                         /* (refused: the state as it is) */
         if (ui.menu) {                                     /* (as ui_menu.c menu_close) */
             ui.menu = 0;
@@ -573,6 +629,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             ui.fam_last[page_group(a[0])] = a[0];
             ui.home = 0;
             page_entered();
+            if (na > 1u)
+                (void)ed_scr_set(PAGES[a[0]].graph, a[1]);
         }
         break;
     case ED_MOTION: {
@@ -617,8 +675,8 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             0x58, 1, ED_SONG2,                          /* (2.0) the song's LIST2, NEW, COPY+, CHAIN, ONCE, the pool's
                                                          * EMPTY, CLEAR UNUSED (editor_song.c; an editor before reads up
                                                          * to 49 01 only) */
-            0x56, 1, 1};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; last: Skiff's
-                                                         * own editor reads up to 58 01 only */
+            0x56, 1, 2};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; 2: the page's
+                                                         * cursor too; last: Skiff's own editor reads up to 58 01 only */
         ed_str("FELUCCA " FELUCCA_VERSION, 24);
         ed_b(NENGINES);
         ed_b(P_COUNT > 127u ? 127u : P_COUNT);            /* ((1.3) more: INFO 49 01) */
