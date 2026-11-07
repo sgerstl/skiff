@@ -83,6 +83,12 @@ static const sheet_t *sheet_of(uint32_t g)
             return &host_sheets[i];
     return 0;
 }
+/* (screen link, 56 01 4) audio.c's oscilloscope ring (not built here: the tests write it) and the reading the screen
+ * and SCOPE share (ui_graph.c includes it in the firmware) */
+#define SCOPE_N 512u
+static int16_t scope_buf[SCOPE_N];
+static uint32_t scope_w;
+#include "../firmware/src/ui_scope.c"
 #include "../firmware/src/editor.c"
 
 static int check(const char *what, int ok)
@@ -200,8 +206,8 @@ static int preferences(void)
     uint8_t a[4] = {0, 3, 0, 0};                          /* (THEME: 3, CRYPT) */
     reset();
     uint32_t n = request(ED_INFO, a, 0);
-    bad += check("INFO (screen link) its tag last: 56 01 03 (SCREEN, SCREEN_GOTO, WATCH bit 2, the cursor, METER)",
-        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 3);
+    bad += check("INFO (screen link) its tag last: 56 01 04 (SCREEN, SCREEN_GOTO, WATCH bit 2, the cursor, METER, SCOPE)",
+        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 4);
     n -= 3u;                                              /* (the tags before it, as they were) */
     bad += check("INFO (2.0) the song's tag next: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
         host_wire[n - 4] == 0x58 && host_wire[n - 3] == 1 && host_wire[n - 2] == ED_SONG2);
@@ -1780,6 +1786,106 @@ static int meter(void)
     bad += check("WATCH 7: no METER", !pushes);
     return bad;
 }
+/* (56 01 4) SCOPE (93), WATCH bit 4: the screen's oscilloscope, 120 points 0..127 around 64, lowest of the pushes */
+static void scope_sine(uint32_t w)                         /* a sine of 100 samples, 16000 high, rising through 0 at 30 */
+{
+    uint32_t i;
+    for (i = 0; i < SCOPE_N; i++)
+        scope_buf[(w + i) & (SCOPE_N - 1u)] = (int16_t)lround(16000.0 * sin(6.283185307179586 * ((double)i - 30.0) / 100.0));
+    scope_w = w;
+}
+static int osc_frame_is(const uint8_t *x, uint32_t trig, int32_t peak)   /* the frame from the ring, independently */
+{
+    uint32_t k;
+    for (k = 0; k < 120u; k++) {
+        int32_t s = scope_buf[(scope_w + trig + 2u * k) & (SCOPE_N - 1u)];
+        int32_t t = scope_buf[(scope_w + trig + 2u * k + 1u) & (SCOPE_N - 1u)];
+        int32_t v = 64 + (int32_t)trunc((double)(abs(t) > abs(s) ? t : s) * 63.0 / peak);
+        if (x[k] != (uint8_t)(v < 1 ? 1 : v > 127 ? 127 : v))
+            return 0;
+    }
+    return x[120] == 0xF7;
+}
+static int scope_stream(void)
+{
+    int bad = 0;
+    uint8_t a[2] = {31, 0};
+    const uint8_t *x = 0;
+    uint32_t i, k, pushes, meters, gap, last, ok;
+    reset();
+    usb.resets = 0;
+    memset(scope_buf, 0, sizeof scope_buf); scope_w = 77;
+    request(ED_WATCH, a, 1);
+    bad += check("WATCH 31: 31 (SCOPE known)", host_wire[5] == 31 && ed_osc_on);
+    for (i = 0, k = 0; i < 3u && !k; i++) {             /* (SCREEN at once, then METER, go first: the lower push waits) */
+        sync_pass();
+        k = wire_frames(ED_OSC, &x);
+    }
+    for (i = 0, ok = k == 1u; ok && i < 120u; i++)
+        ok &= x[i] == 64;
+    bad += check("SCOPE at once after SCREEN and METER; silence: 120 x 64, then F7 (126 bytes)", ok && x[120] == 0xF7 && x[-5] == 0xF0);
+    for (i = 0; i < SCOPE_N; i++)                         /* (under the floor: small, not blown up) */
+        scope_buf[i] = (int16_t)(i & 1u ? 700 : -700);
+    scope_w = 0;
+    request(ED_OSC, a, 0);
+    bad += check("quiet (+-700, the floor 1500): triggered at 1, of each equal pair the first: 64 + 29 throughout",
+        host_wire_n == 126u && host_wire[5] == 64 + 29 && host_wire[5 + 119] == 64 + 29 && host_wire[125] == 0xF7);
+    scope_sine(0);
+    request(ED_OSC, a, 0);
+    x = host_wire + 5;
+    bad += check("SCOPE asked: a sine, triggered at its rising zero (30), the peak 127, the trough 1",
+        host_wire_n == 126u && host_wire[4] == ED_OSC && x[0] == 67 && x[12] == 127 && x[37] == 1 && x[25] == 61 &&
+        x[62] == 127 && x[87] == 1 && x[112] == 127);
+    bad += check("   every point: the farther from 0 of each pair, peak to +-63", osc_frame_is(x, 30, 16000));
+    scope_sine(333);                                        /* (the ring's write position elsewhere: the same picture) */
+    request(ED_OSC, a, 0);
+    bad += check("   the ring read from scope_w (333): the same frame", osc_frame_is(host_wire + 5, 30, 16000) && host_wire[5 + 12] == 127);
+    for (i = 0; i < SCOPE_N; i++)                         /* (full scale both ways: nothing wraps) */
+        scope_buf[i] = (int16_t)(i < 20u ? -32768 : 32767);
+    scope_w = 0;
+    request(ED_OSC, a, 0);
+    bad += check("full scale: the trigger at 20; -32768 sets the peak, so +32767 is 126 throughout",
+        host_wire[5] == 126 && host_wire[5 + 119] == 126 && host_wire[125] == 0xF7);
+    scope_sine(0);
+    request(ED_PING, a, 0);
+    for (i = 0, pushes = 0, meters = 0, gap = 1000, last = 0; i < 200u; i++) {   /* 1 s of 5 ms passes, meters moving */
+        trk[2].peak = i >> 3 & 1u ? 30000 : 3000;         /* (each 40 ms reading another level) */
+        host_wire_n = 0; fm1_ms += 5u; ed_sync(); host_drain();
+        if (wire_frames(ED_OSC, 0)) {
+            if (last && fm1_ms - last < gap) gap = fm1_ms - last;
+            last = fm1_ms;
+            pushes++;
+        }
+        meters += wire_frames(ED_METER, 0);
+    }
+    bad += check("SCOPE with METER moving: 12..15 a second, never closer than 66 ms; METER 20..25", pushes >= 12u && pushes <= 15u &&
+        gap >= 66u && meters >= 20u && meters <= 25u);
+    request(ED_PING, a, 0);
+    TSEL->p[P_PAN] = 33;                                  /* (a value pushed in the same pass) */
+    fm1_ms += 70u; host_wire_n = 0; ed_sync(); host_drain();
+    bad += check("another push in the pass: SCOPE waits (CHANGED goes)", !wire_frames(ED_OSC, 0) && wire_frames(ED_CHANGED, 0) >= 1u);
+    for (i = 0, k = 0; i < 3u && !k; i++) {             /* (METER, held back too, may go first) */
+        host_wire_n = 0; fm1_ms += 5u; ed_sync(); host_drain();
+        k = wire_frames(ED_OSC, 0);
+    }
+    bad += check("   then goes in one of the next passes", k == 1u);
+    so_w = so_r + 1u;                                     /* (a packet not taken yet: the queue isn't empty) */
+    fm1_ms += 70u; host_wire_n = 0; ed_sync();
+    k = so_w - so_r;
+    so_w = so_r;
+    bad += check("a queue not empty: no SCOPE", k == 1u);
+    a[0] = 15; request(ED_WATCH, a, 1);
+    bad += check("WATCH 15: 15 (SCOPE off)", host_wire[5] == 15 && !ed_osc_on);
+    for (i = 0, pushes = 0; i < 40u; i++) { sync_pass(); pushes += wire_frames(ED_OSC, 0); }
+    bad += check("WATCH 15: no SCOPE", !pushes);
+    a[0] = 17; request(ED_WATCH, a, 1);
+    for (i = 0, pushes = 0; i < 120u; i++) { sync_pass(); pushes += wire_frames(ED_OSC, 0); }
+    bad += check("WATCH 17: SCOPE again, every third 30 ms pass, until WATCH lapses (3 s without a request)",
+        pushes >= 32u && pushes <= 34u && !ed_w.on);
+    for (i = 0, pushes = 0; i < 40u; i++) { sync_pass(); pushes += wire_frames(ED_OSC, 0); }
+    bad += check("   and none after", !pushes);
+    return bad;
+}
 static int screen_link(void)
 {
     int bad = 0;
@@ -1854,7 +1960,7 @@ static int screen_link(void)
     ui.page = (uint8_t)fx;
     a[0] = 0; request(ED_SCREEN_GOTO, a, 0);
     bad += check("SCREEN_GOTO without its page: no reply", !host_wire_n);
-    return bad + screen_cursor() + meter();
+    return bad + screen_cursor() + meter() + scope_stream();
 }
 
 int main(void)

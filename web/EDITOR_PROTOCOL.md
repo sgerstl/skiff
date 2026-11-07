@@ -198,7 +198,7 @@ at 1..3 and hides 6 5 8: what it sets still plays the right kit, and the device 
 
 | cmd | Request args | Reply args |
 | --- | --- | --- |
-| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) and (screen link, not in Skiff 2.2) `56 01 v` (SCREEN, SCREEN_GOTO, WATCH bit 2; v 2: the page's cursor; v 3: METER, WATCH bit 3; "Screen link" below) ; older firmware ends earlier |
+| 1 INFO | — | version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, then NENGINES engine-name strings, then (v3) NTRK (4; Skiff phase 6: 6), then (v6) CHAIN_ROWS (16), then the tagged blocks `55 01 uiCaps`, `4D 01 64 01`, `42 01 3`, `46 01 nfactory nbank`, `53 01 3`, (1.0.3) `50 01 3` and (1.0.4) `4E 01 count` (MENU settings; 12, 1.1: 15, 1.2: 17, 1.1.5: 18, Skiff U2: 16) and (1.0.5) `52 01 4` (ratchet) and (1.1) `4C 01 1` (parameter locks) and (Skiff phase 6) `54 01 tracks e0 e1 e2` (light tracks) (below) and (Skiff W1) `43 01 count` (a step's FLAM, COND, NUDGE; count: the trig conditions) and (Skiff W3) `4B 01 8` (the DRUM-X kit, below) and (Skiff W3) `57 01 caps` (bit 0 TRANSPORT, bit 1 PROJ_NAME, bit 2 POOL, bit 3 LIST, bit 4 PERFORM, (#21) bit 5 SMP_MIX, (2.0) bit 6 a step's ties, below) and (Skiff 1.3) `49 01 c0 c1 e0 e1` (wide ids: P_COUNT and P_E0, above) and (2.0) `58 01 caps` (bit 0: LIST2, NEW, COPY+, CHAIN, SONG ONCE, the pool's EMPTY and CLEAR UNUSED; (#30) bit 1: the entries' sounds, LIST2's op 9 and its reply's sound bytes; "Pool, lists, PERFORM" below) and (screen link, not in Skiff 2.2) `56 01 v` (SCREEN, SCREEN_GOTO, WATCH bit 2; v 2: the page's cursor; v 3: METER, WATCH bit 3; v 4: SCOPE, WATCH bit 4; "Screen link" below) ; older firmware ends earlier |
 | 2 GET | scope, id | scope, id, v14 |
 | 3 SET | scope, id, v14 | scope, id, v14 (the value after clamping). Setting global `G_ENGSEL` (id from DESC label "ENG") changes the engine: its defaults, then its first preset (as on the device) |
 | 4 DUMP | — | engine, preset, then P_COUNT × v14 (the selected track), then G_COUNT × v14 (globals) |
@@ -219,7 +219,7 @@ at 1..3 and hides 6 5 8: what it sets still plays the right kit, and the device 
 | 19 UP_STORE | slot, name | slot, rc. Stores the current sound: engine, parameters, the first 16 sequencer steps as the pattern (TIE steps → flag 4) |
 | 20 UP_LOAD | slot | slot, rc (0 ok, 1 empty/invalid). Applies its sound (not its pattern; the steps stay) |
 | 21 UP_ERASE | slot | slot, rc |
-| 22 WATCH | on (0/1; v4: 3 = also `TRACK_CHANGED`; screen link: bit 2 = also `SCREEN`, bit 3 = also `METER`) | on (0/1; v4 firmware: 3 when 3 was asked for; screen link: bits 2 and 3 set when asked for). While on, the device pushes cmds 23, 24, 26 (and 32 with bit 1, 90 with bit 2, 92 with bit 3) |
+| 22 WATCH | on (0/1; v4: 3 = also `TRACK_CHANGED`; screen link: bit 2 = also `SCREEN`, bit 3 = also `METER`, bit 4 = also `SCOPE`) | on (0/1; v4 firmware: 3 when 3 was asked for; screen link: bits 2..4 set when asked for). While on, the device pushes cmds 23, 24, 26 (and 32 with bit 1, 90 with bit 2, 92 with bit 3, 93 with bit 4) |
 | 23 CHANGED (push) | — | scope, id, v14 |
 | 24 RELOAD (push) | — | engine, preset, then (v3) the selected track |
 | 25 PING | — | 0 |
@@ -1134,20 +1134,21 @@ at ~0.6 s while the MIDI port was not seen to disappear at all (so do not wait f
 a real change, wait ~1.5 s and open again). What the editor sends in that window is lost, `WATCH` ends with the
 bus reset (send `INFO` and `WATCH` again after reconnecting), and a backup in progress answers rc 5 (stale).
 
-## Screen link (90, 91, 92; the fm1-ipad patch, not in Skiff 2.2)
+## Screen link (90..93; the fm1-ipad patch, not in Skiff 2.2)
 
 An editor that follows the FM-1's screen (Jib, the iPad app) and opens its pages. It is a patch on Skiff 2.2
 (`skiff/0001-screen-link.patch` in the fm1-ipad repository); stock Skiff answers neither command and has no
 `56 01` tag. The numbers and the first four bytes of the state are those of the same patch on SLOOP 2.8.4 (its
 `UI`, `UI_GOTO`), with Skiff's own page and layer numbers. INFO advertises `56 01 1` after `58 01` (last: Skiff's own
 editor reads up to `58 01` only). Its byte: 1, the six bytes below; 2, the page's cursor after them and
-SCREEN_GOTO's cursor; 3, `METER` and `WATCH` bit 3 too. Read SCREEN's reply by its length: a later version only appends.
+SCREEN_GOTO's cursor; 3, `METER` and `WATCH` bit 3 too; 4, `SCOPE` and `WATCH` bit 4 too. Read SCREEN's reply by its length: a later version only appends.
 
 | cmd | Request args | Reply args |
 | --- | --- | --- |
 | 90 SCREEN | none | home (0/1), page (index into `PAGES`, `params.c`), layer (0 none, 1 FX, 2 GLO, 3 SCL, 4 EDIT, 5 SEQ, 6 REC, 7 PERF: `LAYER_*`, `ui.c`), menu (0 off, 1 the list, 2 ABOUT), the selected track (0..NTRK−1), flags (bit 0 HOME shows the scope, bit 1 the layer is locked open, bit 2 HOME is held: SHIFT's map), then (`56 01 2`) the page's cursor and its second (127: none; table below) |
 | 91 SCREEN_GOTO | page (0..NPAGES−1), or 127 (HOME) [, cursor (`56 01 2`)] | as SCREEN, after the change |
 | 92 METER (`56 01 3`) | none | each track's output level, NTRK bytes (6), 0..127 (below); also pushed |
+| 93 SCOPE (`56 01 4`) | none | the output oscilloscope, 120 bytes, 0..127, 64 the centre line (below); also pushed |
 
 - **Pushes.** While `WATCH` was sent with bit 2 (`WATCH 7`, or 5), the device pushes `SCREEN` whenever one of its
   six bytes changes: a page or family button, SELECT walking the family, a layer button held (its map open) and let
@@ -1204,7 +1205,17 @@ SCREEN_GOTO's cursor; 3, `METER` and `WATCH` bit 3 too. Read SCREEN's reply by i
   second alongside). The screen's own meters are unaffected: they and `METER` each take the peak since their own
   last reading (`ui.c` `peak_take`). `WATCH` with bit 3 newly asked for starts from silence (what built up before is
   dropped) and pushes within a second. No master level: the firmware keeps none (the limiter's isn't the meter's).
-- An editor that never sends bits 2 or 3, 90, 91 or 92 sees no difference: no new pushes, the replies to `WATCH` as
+- **SCOPE** (`56 01 4`): the oscilloscope the EDIT pages and HOME draw (`ui_graph.c` `graph_scope`), from the same
+  reading (`ui_scope.c` `scope_take`): the last 512 samples of the master output (every second frame, the left
+  channel, before the metronome), triggered on the first rising zero crossing (none in the first 271: from the oldest
+  sample), the 240 samples from there halved to 120 points, of each pair the one farther from 0 (the first when equal),
+  and auto-scaled as the screen is: the largest |sample| of the 512, at least 1500 (about −27 dB, so quiet stays small),
+  is ±63 around 64. Bytes 1..127, high above the line; silence is 120 × 64. The 120 points cover 240 samples, about
+  10 ms. While `WATCH` was sent with bit 4 (`WATCH 17`, or 31 with everything), the device pushes `SCOPE` at most
+  every 66 ms (15 a second), and like `METER` only into an empty send queue in a pass that pushed nothing else; one that
+  could not go waits for the next such pass (5 ms later) and is not dropped. When `METER` is due in the same pass it goes
+  first. 126 bytes on the wire, about 1.9 kB/s. `WATCH` with bit 4 newly asked for pushes within the next free pass.
+- An editor that never sends bits 2..4, 90, 91, 92 or 93 sees no difference: no new pushes, the replies to `WATCH` as
   before (bits 0 and 1).
 
 Example (bytes in hex): `F0 7D 46 4C 16 07 F7` (`WATCH 7`) answers `F0 7D 46 4C 16 07 F7`, then pushes
@@ -1214,3 +1225,5 @@ F7`, let go: `.. 5A 00 05 00 00 00 00 7F 7F F7`. `F0 7D 46 4C 5B 1F F7` (`SCREEN
 unchanged. `F0 7D 46 4C 5B 04 09 F7` (MOD, route 9: the screen's 10) answers `.. 5B 00 04 00 00 00 00 09 7F F7`.
 `F0 7D 46 4C 16 0F F7` (`WATCH 15`) answers `.. 16 0F F7`; with track 1 playing at −6 dB the device pushes
 `F0 7D 46 4C 5C 65 00 00 00 00 00 F7`, and after it stops, falling readings down to `.. 5C 00 00 00 00 00 00 F7`.
+`F0 7D 46 4C 16 11 F7` (`WATCH 17`) answers `.. 16 11 F7`; in silence the device pushes `F0 7D 46 4C 5D` then 120 × `40`
+and `F7`; a sine at its peak level reads `.. 5D 43 .. 7F .. 01 ..`, rising from just above `40`.

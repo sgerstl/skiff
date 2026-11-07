@@ -2480,29 +2480,20 @@ static void qk_detector(int32_t cx, int32_t cy)
     qk_disc(cx, cy, newest < 150u ? 3 : 2, T_ACCENT);
 }
 
+#include "ui_scope.c"                                /* (Skiff screen link) the reading, shared with the editor's SCOPE */
+
 /* oscilloscope of the output, triggered on a rising zero crossing: a RAISE centre line, the trace 2 px (in silence
  * a flat line on it; MENU > SCREEN OFF keeps it from staying on the panel for hours) */
 static void graph_scope(uint16_t c)
 {
-    static int16_t snap[SCOPE_N];
-    uint32_t w = scope_w, i, trig = 0;
-    int32_t cy = (int32_t)cv_h / 2, py = cy, x, peak = 1500, a = cv_h >= H_GRAPH ? 46 : cy - 6;   /* (LARGE: the strip) */
+    const int16_t *snap = scope_snap;
+    uint32_t trig;
+    int32_t cy = (int32_t)cv_h / 2, py = cy, x, peak, a = cv_h >= H_GRAPH ? 46 : cy - 6;   /* (LARGE: the strip) */
     if (ux.quark && cv_h >= H_GRAPH) {
         qk_detector(120, cy);
         return;
     }
-    for (i = 0; i < SCOPE_N; i++) {
-        snap[i] = scope_buf[(w + i) & (SCOPE_N - 1u)];
-        if (snap[i] > peak)
-            peak = snap[i];
-        else if (-snap[i] > peak)
-            peak = -snap[i];
-    }
-    for (i = 1; i < SCOPE_N - 240u; i++)
-        if (snap[i - 1] < 0 && snap[i] >= 0) {
-            trig = i;
-            break;
-        }
+    trig = scope_take(&peak);                        /* (ui_scope.c: the ring copied, its peak, the trigger) */
     if (ux.crypt) {                                  /* (Skiff N8) CRYPT: the sound burns: fire up from the foot as tall
                                                       * as the wave there (ember, amber, gold, its tips flame), flickering;
                                                       * behind it a skull, its eyes as bright as the sound is loud */
