@@ -1212,9 +1212,9 @@ SCREEN_GOTO's cursor; 3, `METER` and `WATCH` bit 3 too; 4, `SCOPE` and `WATCH` b
   and auto-scaled as the screen is: the largest |sample| of the 512, at least 1500 (about −27 dB, so quiet stays small),
   is ±63 around 64. Bytes 1..127, high above the line; silence is 120 × 64. The 120 points cover 240 samples, about
   10 ms. While `WATCH` was sent with bit 4 (`WATCH 17`, or 31 with everything), the device pushes `SCOPE` at most
-  every 66 ms (15 a second), and like `METER` only into an empty send queue in a pass that pushed nothing else; one that
+  every 33 ms (30 a second; at `56 01 4`, the first build with it, every 66 ms), and like `METER` only into an empty send queue in a pass that pushed nothing else; one that
   could not go waits for the next such pass (5 ms later) and is not dropped. When `METER` is due in the same pass it goes
-  first. 126 bytes on the wire, about 1.9 kB/s. `WATCH` with bit 4 newly asked for pushes within the next free pass.
+  first. 126 bytes on the wire, about 3.8 kB/s. `WATCH` with bit 4 newly asked for pushes within the next free pass.
 - An editor that never sends bits 2..4, 90, 91, 92 or 93 sees no difference: no new pushes, the replies to `WATCH` as
   before (bits 0 and 1).
 

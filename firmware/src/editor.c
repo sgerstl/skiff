@@ -77,7 +77,7 @@ static int32_t ed_rv(const uint8_t *p) { return (int32_t)(p[0] | p[1] << 7) - 81
  *                      dropped
  *   93 SCOPE        -> (56 01 4) the output oscilloscope as graph_scope draws it (ui_scope.c scope_take): ED_OSC_N
  *                      (120) bytes 1..127, 64 the centre line, high above it, the peak 1 / 127 (ed_osc_reply); pushed
- *                      at most 15 times a second while WATCH was sent with bit 4 (16), with METER the lowest of the
+ *                      at most 30 times a second (56 01 5; 15 at 56 01 4) while WATCH was sent with bit 4 (16), with METER the lowest of the
  *                      pushes: only into an empty queue, else later (METER first when both are due)
  * An editor that never sends bits 2..4, 90, 91, 92 or 93 sees no difference. (ED_OSC: ED_SCOPE is a track
  * parameter's scope byte, below) */
@@ -183,9 +183,9 @@ static void ed_met_tick(uint32_t now)
  * its SCOPE_SPAN samples from the trigger halved to ED_OSC_N points, of each pair the one farther from 0 (a peak or an
  * edge falling between two points is kept, as the screen's 2 px line shows it), auto-scaled as the screen does: the
  * peak to +-63 around 64, clamped to 1..127. Silence: 64 throughout. 126 bytes on the wire (42 USB-MIDI packets of the
- * queue's 64), at most every ED_OSC_MS (~15 a second, 1.9 kB/s) */
+ * queue's 64), at most every ED_OSC_MS (~30 a second, 3.8 kB/s; 56 01 5, Scott 2026-11-07: 15 looked steppy) */
 #define ED_OSC_N (SCOPE_SPAN / 2u)                       /* 120 */
-#define ED_OSC_MS 66u
+#define ED_OSC_MS 33u
 static uint8_t ed_osc_on;
 static uint32_t ed_osc_t;                                /* fm1_ms of the last push */
 static void ed_osc_reply(void)
@@ -757,8 +757,9 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             0x58, 1, ED_SONG2,                          /* (2.0) the song's LIST2, NEW, COPY+, CHAIN, ONCE, the pool's
                                                          * EMPTY, CLEAR UNUSED (editor_song.c; an editor before reads up
                                                          * to 49 01 only) */
-            0x56, 1, 4};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; 2: the page's
+            0x56, 1, 5};                                /* (screen link) SCREEN, SCREEN_GOTO, WATCH bit 2; 2: the page's
                                                          * cursor too; 3: METER, WATCH bit 3; 4: SCOPE, WATCH bit 4;
+                                                         * 5: SCOPE 30 a second, not 15;
                                                          * last: Skiff's own editor reads up to 58 01 only */
         ed_str("FELUCCA " FELUCCA_VERSION, 24);
         ed_b(NENGINES);

@@ -206,8 +206,8 @@ static int preferences(void)
     uint8_t a[4] = {0, 3, 0, 0};                          /* (THEME: 3, CRYPT) */
     reset();
     uint32_t n = request(ED_INFO, a, 0);
-    bad += check("INFO (screen link) its tag last: 56 01 04 (SCREEN, SCREEN_GOTO, WATCH bit 2, the cursor, METER, SCOPE)",
-        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 4);
+    bad += check("INFO (screen link) its tag last: 56 01 05 (SCREEN, SCREEN_GOTO, WATCH bit 2, the cursor, METER, SCOPE at 30 a second)",
+        host_wire[n - 4] == 0x56 && host_wire[n - 3] == 1 && host_wire[n - 2] == 5);
     n -= 3u;                                              /* (the tags before it, as they were) */
     bad += check("INFO (2.0) the song's tag next: 58 01 01 (LIST2, NEW, COPY+, CHAIN, ONCE, EMPTY, CLEAR UNUSED)",
         host_wire[n - 4] == 0x58 && host_wire[n - 3] == 1 && host_wire[n - 2] == ED_SONG2);
@@ -1858,8 +1858,8 @@ static int scope_stream(void)
         }
         meters += wire_frames(ED_METER, 0);
     }
-    bad += check("SCOPE with METER moving: 12..15 a second, never closer than 66 ms; METER 20..25", pushes >= 12u && pushes <= 15u &&
-        gap >= 66u && meters >= 20u && meters <= 25u);
+    bad += check("SCOPE with METER moving: 24..30 a second, never closer than 33 ms; METER 20..25", pushes >= 24u && pushes <= 30u &&
+        gap >= 33u && meters >= 20u && meters <= 25u);
     request(ED_PING, a, 0);
     TSEL->p[P_PAN] = 33;                                  /* (a value pushed in the same pass) */
     fm1_ms += 70u; host_wire_n = 0; ed_sync(); host_drain();
@@ -1880,8 +1880,8 @@ static int scope_stream(void)
     bad += check("WATCH 15: no SCOPE", !pushes);
     a[0] = 17; request(ED_WATCH, a, 1);
     for (i = 0, pushes = 0; i < 120u; i++) { sync_pass(); pushes += wire_frames(ED_OSC, 0); }
-    bad += check("WATCH 17: SCOPE again, every third 30 ms pass, until WATCH lapses (3 s without a request)",
-        pushes >= 32u && pushes <= 34u && !ed_w.on);
+    bad += check("WATCH 17: SCOPE again, every second 30 ms pass, until WATCH lapses (3 s without a request)",
+        pushes >= 49u && pushes <= 51u && !ed_w.on);
     for (i = 0, pushes = 0; i < 40u; i++) { sync_pass(); pushes += wire_frames(ED_OSC, 0); }
     bad += check("   and none after", !pushes);
     return bad;
